@@ -1,0 +1,38 @@
+# Baseline-эксперимент: лексика + SBERT + GBM.
+# Перед запуском пайплайна модель должна быть обучена:
+#   python scripts/train_classifier.py \
+#       --annotations data/labeled/annotations.csv \
+#       --backend gbm --run-id exp_baseline_gbm
+
+run_id: exp_baseline_gbm
+taxonomy: configs/taxonomy.yaml
+
+parser:
+  name: freemind
+  options: {}
+
+pairing:
+  name: parent_child
+  options: {}
+
+features:
+  - name: lexical_simple
+    options: {}
+  - name: topology
+    options: {}
+  - name: sbert
+    options:
+      include_vectors: false
+
+classifier:
+  name: sklearn
+  options:
+    backend: gbm
+    model_path: models/exp_baseline_gbm.joblib
+
+exporters:
+  - name: graphml
+    options: {}
+  - name: jsonld
+    options:
+      base_iri: "https://mindmap2kg.org/v1/"

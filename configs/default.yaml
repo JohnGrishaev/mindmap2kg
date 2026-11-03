@@ -1,0 +1,32 @@
+# Дефолтный конфиг пайплайна mindmap2kg.
+# Использует заглушку-классификатор: end-to-end проверка без обученной модели.
+# Скопируй и измени для своих экспериментов в configs/experiments/.
+
+run_id: skeleton_demo
+taxonomy: configs/taxonomy.yaml
+
+parser:
+  name: freemind
+  options: {}
+
+pairing:
+  name: parent_child
+  options: {}
+
+features:
+  - name: lexical_simple
+    options: {}
+  - name: topology
+    options: {}
+
+classifier:
+  name: dummy            # заменить на: gbm / mlp / sbert_mlp, когда появятся
+  options:
+    seed: 42
+
+exporters:
+  - name: graphml
+    options: {}
+  - name: jsonld
+    options:
+      base_iri: "https://mindmap2kg.org/v1/"

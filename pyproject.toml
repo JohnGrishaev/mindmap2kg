@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mindmap2kg"
+version = "0.1.0"
+description = "Преобразование mind-map в граф знаний с разметкой типов связей"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{name = "Иван Гришаев"}]
+dependencies = [
+    "pyyaml>=6.0",
+    "networkx>=3.0",
+    "pandas>=2.0",
+    "lxml>=4.9",
+    "click>=8.0",
+    "requests>=2.28",
+]
+
+[project.optional-dependencies]
+# UI и визуализация
+ui = ["streamlit>=1.30", "plotly>=5.18"]
+# Эмбеддинги текста
+text = ["sentence-transformers>=2.5", "spacy>=3.7"]
+# ML-классификаторы
+ml = ["scikit-learn>=1.4", "torch>=2.0"]
+# Хранение через Parquet (когда появятся эмбеддинги)
+parquet = ["pyarrow>=14.0"]
+# Разработка
+dev = ["pytest>=7.0", "ruff>=0.1"]
+# Всё сразу
+all = ["mindmap2kg[ui,text,ml,parquet,dev]"]
+
+[project.scripts]
+m2kg = "mindmap2kg.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+mindmap2kg = ["py.typed"]

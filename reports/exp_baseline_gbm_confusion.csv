@@ -1,0 +1,6 @@
+,causes,has_example,has_function,has_part,has_property
+causes,5,5,0,3,2
+has_example,5,38,2,11,6
+has_function,0,3,1,4,0
+has_part,3,8,1,6,2
+has_property,0,12,3,6,3
