@@ -37,7 +37,7 @@ with tabs[0]:
 
     with col1:
         st.subheader("Параметры")
-        config_path = st.text_input("Конфиг", value="configs/experiments/exp_baseline_gbm.yaml") # upd default
+        config_path = st.text_input("Конфиг", value="configs/experiments/exp_tfidf.yaml")
         uploaded = st.file_uploader("Загрузить mind-map (.mm)", type=["mm"])
         run_btn = st.button("Запустить пайплайн", disabled=(uploaded is None))
 

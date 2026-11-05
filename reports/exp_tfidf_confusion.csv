@@ -1,0 +1,7 @@
+,causes,has_example,has_function,has_part,has_property,precedes
+causes,7,10,1,0,1,18
+has_example,3,67,5,7,5,20
+has_function,2,8,5,4,0,1
+has_part,0,13,2,7,1,0
+has_property,2,6,3,6,3,0
+precedes,1,2,1,0,1,13

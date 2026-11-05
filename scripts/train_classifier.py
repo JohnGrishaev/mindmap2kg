@@ -7,8 +7,8 @@
   3. строим признаки: lexical_simple + sbert (без полных векторов)
      [топология не считается — для табличных пар у нас нет MindMap;
       она доступна только в инференсе на реальной карте]
-  4. train/test split со стратификацией по relation
-  5. обучаем модель (gbm/logreg/rf/hgbm)
+  4. train/test split: групповой по seed (--group-split) или стратифицированный
+  5. обучаем модель (tfidf_logreg/gbm/logreg/rf/hgbm)
   6. метрики: macro-F1, per-class precision/recall/F1, confusion matrix
   7. сохраняем модель → models/{run_id}.joblib
   8. сохраняем отчёт → reports/{run_id}.md и confusion.csv
@@ -16,9 +16,9 @@
 Использование:
     python scripts/train_classifier.py \\
         --annotations data/labeled/annotations.csv \\
-        --backend gbm \\
-        --run-id baseline_gbm_v1 \\
-        --per-class-cap 300 --per-seed-cap 100
+        --backend tfidf_logreg \\
+        --run-id exp_tfidf \\
+        --per-class-cap 300 --per-seed-cap 100 --group-split
 
 Замечание про topology-фичи:
   В этом скрипте мы обучаемся на табличных парах (без mind-map). Топология
@@ -44,7 +44,7 @@ import yaml
 import mindmap2kg  # noqa: F401
 from mindmap2kg.annotation.balance import balance
 from mindmap2kg.classifiers.sklearn_wrapper import (
-    SklearnClassifier, select_feature_columns,
+    BACKENDS, SklearnClassifier, make_input, select_feature_columns,
 )
 from mindmap2kg.core.schemas import MindMap, Node
 from mindmap2kg.core.registry import get
@@ -164,8 +164,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--annotations", required=True,
                     help="CSV с парами и колонкой relation")
-    ap.add_argument("--backend", default="gbm",
-                    choices=["gbm", "hgbm", "rf", "logreg"])
+    ap.add_argument("--backend", default="tfidf_logreg", choices=BACKENDS)
     ap.add_argument("--run-id", default="baseline_gbm",
                     help="Идентификатор прогона (для имён файлов)")
     ap.add_argument("--per-seed-cap", type=int, default=100)
@@ -178,6 +177,9 @@ def main() -> int:
                          "оценку генерализации на новый процесс/тему. "
                          "Особенно важно для precedes (этапы одного процесса "
                          "не должны попасть и в train, и в test).")
+    ap.add_argument("--refit-full", action="store_true",
+                    help="После оценки переобучить модель на всех парах и "
+                         "сохранить её (метрики в отчёте — по тестовой части).")
     ap.add_argument("--no-sbert", action="store_true",
                     help="Без SBERT (только лексика). Для smoke-теста.")
     ap.add_argument("--sbert-model", default=None,
@@ -188,7 +190,7 @@ def main() -> int:
     args = ap.parse_args()
 
     # --- 1. Загрузка ---------------------------------------------------------
-    df = pd.read_csv(args.annotations)
+    df = pd.read_csv(args.annotations, encoding="utf-8-sig")
     logger.info("Загружено пар: %d", len(df))
     if "relation" not in df.columns:
         raise ValueError("В таблице нет колонки 'relation'")
@@ -267,31 +269,23 @@ def main() -> int:
     # --- 5. Загрузка таксономии и обучение ---------------------------------
     taxonomy = yaml.safe_load(Path(args.taxonomy).read_text(encoding="utf-8"))
 
-    # class_weight для дисбаланса
+    # Дисбаланс: rf/logreg/tfidf_logreg — class_weight="balanced" (по умолчанию
+    # в _make_estimator); у GradientBoosting class_weight нет — даём sample_weight.
     extra_kw: dict = {}
-    if args.backend in {"rf", "logreg"}:
-        extra_kw["class_weight"] = "balanced"
-    # GradientBoostingClassifier не имеет class_weight; используем sample_weight ниже
+    if args.backend in {"gbm", "hgbm", "rf"}:
+        extra_kw["random_state"] = args.random_state
     sample_weight = None
     if args.backend in {"gbm", "hgbm"}:
         from sklearn.utils.class_weight import compute_sample_weight
         sample_weight = compute_sample_weight("balanced", y_train)
 
     clf = SklearnClassifier(taxonomy=taxonomy, backend=args.backend, **extra_kw)
-    clf.feature_columns = feature_columns
-
-    # ручная подача sample_weight: используем sklearn напрямую
-    from mindmap2kg.classifiers.sklearn_wrapper import _make_estimator
-    est = _make_estimator(args.backend, **extra_kw)
-    Xtr = X_train[feature_columns].astype(float).values
-    if sample_weight is not None:
-        est.fit(Xtr, y_train.values, sample_weight=sample_weight)
-    else:
-        est.fit(Xtr, y_train.values)
-    clf.estimator = est
+    clf.fit(X_train, y_train, feature_columns=feature_columns,
+            sample_weight=sample_weight)
+    est = clf.estimator
 
     # --- 6. Оценка ----------------------------------------------------------
-    Xte = X_test[feature_columns].astype(float).values
+    Xte = make_input(X_test, args.backend, feature_columns)
     y_pred = est.predict(Xte)
 
     all_labels = sorted(set(y_train.tolist() + y_test.tolist()))
@@ -310,6 +304,14 @@ def main() -> int:
                   f"{r['f1-score']:>7.3f} {int(r['support']):>5d}")
 
     # --- 7. Сохранение модели ----------------------------------------------
+    if args.refit_full:
+        sw_all = None
+        if args.backend in {"gbm", "hgbm"}:
+            from sklearn.utils.class_weight import compute_sample_weight
+            sw_all = compute_sample_weight("balanced", feats["relation"])
+        clf.fit(feats, feats["relation"], feature_columns=feature_columns,
+                sample_weight=sw_all)
+        logger.info("Модель переобучена на всех %d парах", len(feats))
     models_dir = Path(args.models_dir)
     models_dir.mkdir(parents=True, exist_ok=True)
     model_path = models_dir / f"{args.run_id}.joblib"

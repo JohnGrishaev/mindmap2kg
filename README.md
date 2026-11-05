@@ -42,21 +42,25 @@ python scripts/merge_annotations.py \
 python scripts/analyze_annotations.py data/labeled/annotations.csv \
     --out reports/annotations_report.md
 
-# 7. Обучить baseline. Для главы 2 ВКР используй --group-split:
-#    он гарантирует, что пары из одного процесса/seed не попадают
-#    одновременно в train и test (честная оценка генерализации).
+# 7. Обучить модель. --group-split: пары одного процесса/seed не попадают
+#    одновременно в train и test. --refit-full: после оценки модель
+#    переобучается на всех парах и сохраняется.
 python scripts/train_classifier.py \
-    --annotations data/labeled/annotations.csv \
-    --backend gbm \
-    --run-id exp_baseline_gbm \
+    --annotations data/labeled/annotations_v1.csv \
+    --backend tfidf_logreg --run-id exp_tfidf \
     --per-seed-cap 100 --per-class-cap 300 \
-    --group-split
-#   → models/exp_baseline_gbm.joblib
-#   → reports/exp_baseline_gbm.md  + confusion.csv
+    --group-split --refit-full --no-sbert
+#   → models/exp_tfidf.joblib
+#   → reports/exp_tfidf.md  + confusion.csv
 
-# 8. Запустить пайплайн с обученной моделью на реальной карте
+# 7a. Оценка на 20 групповых разбиениях (среднее ± ст. откл.) — эти числа в ВКР
+python scripts/evaluate_repeated.py \
+    --annotations data/labeled/annotations_v1.csv \
+    --features lex lex_sbert lex_svec --backends tfidf_logreg rf logreg
+
+# 8. Запустить пайплайн с обученной моделью на карте
 python scripts/run_pipeline.py data/raw/synthetic_клетка.mm \
-    --config configs/experiments/exp_baseline_gbm.yaml
+    --config configs/experiments/exp_tfidf.yaml
 
 # 9. Открыть UI (опционально)
 streamlit run src/mindmap2kg/viz/dashboard.py
@@ -72,6 +76,21 @@ streamlit run src/mindmap2kg/viz/dashboard.py
 kg.graphml           # итоговый KG для Gephi
 kg.jsonld            # итоговый KG для веб-приложений
 ```
+
+## Текущие результаты (20 групповых разбиений, без SBERT)
+
+| Модель | Macro-F1 |
+|---|---:|
+| tfidf_logreg (символьные n-граммы меток + лексика) | 0.437 ± 0.056 |
+| rf (только лексика) | 0.311 ± 0.042 |
+| всегда has_example | 0.10 |
+
+Важно: признаками считаются только колонки `lex_*`, `sbert_*`, `topo_*`.
+До исправления в признаки попадала служебная колонка `curated_version`
+(есть только у пар precedes) — это давало precedes F1 = 1.0 и ломало
+применение модели к реальной карте. Модели в `models/exp_*_sbert.joblib`,
+`exp_baseline_gbm.joblib` и отчёты к ним — старые (5 классов), их стоит
+переобучить.
 
 ## Что уже работает
 

@@ -6,6 +6,11 @@
   * logreg — LogisticRegression (быстрый бейзлайн)
   * rf — RandomForestClassifier
   * hgbm — HistGradientBoostingClassifier (быстрее на больших данных)
+  * tfidf_logreg — логистическая регрессия на символьных n-граммах меток
+    u_text и v_text (TF-IDF, 2–5 символов) плюс все числовые признаки
+    (стандартизованные). Лучший вариант на текущих данных: n-граммы ловят
+    морфологию меток (-ость, -ние, -аза, -оз …), которую не видят
+    длины и коэффициенты Жаккара.
 
 Модель ОБУЧАЕТСЯ внешним скриптом (scripts/train_classifier.py) и сохраняется
 joblib-ом в models/{run_id}.joblib. Здесь предусмотрены два режима:
@@ -15,8 +20,8 @@ joblib-ом в models/{run_id}.joblib. Здесь предусмотрены д�
 В пайплайне (configs/*.yaml) указываем classifier:
     name: sklearn
     options:
-      backend: gbm
-      model_path: models/exp_baseline.joblib
+      backend: tfidf_logreg
+      model_path: models/exp_tfidf.joblib
 """
 from __future__ import annotations
 
@@ -33,9 +38,14 @@ from ..core.schemas import Prediction
 
 logger = logging.getLogger(__name__)
 
+# Бэкенды, которые помимо числовых признаков читают сырые тексты меток
+TEXT_BACKENDS = {"tfidf_logreg"}
+TEXT_COLS = ["u_text", "v_text"]
+BACKENDS = ["gbm", "hgbm", "rf", "logreg", "tfidf_logreg"]
+
 
 # Каркасные конструкторы. Импорт sklearn — ленивый.
-def _make_estimator(backend: str, **kw) -> Any:
+def _make_estimator(backend: str, feature_columns: list[str] | None = None, **kw) -> Any:
     if backend == "gbm":
         from sklearn.ensemble import GradientBoostingClassifier
         return GradientBoostingClassifier(**kw)
@@ -49,10 +59,56 @@ def _make_estimator(backend: str, **kw) -> Any:
         return RandomForestClassifier(**kw)
     if backend == "logreg":
         from sklearn.linear_model import LogisticRegression
+        from sklearn.pipeline import make_pipeline
+        from sklearn.preprocessing import StandardScaler
         kw.setdefault("max_iter", 2000)
         kw.setdefault("class_weight", "balanced")
-        return LogisticRegression(**kw)
+        # Признаки разного масштаба (длины, Жаккар, косинус) — без
+        # стандартизации логистическая регрессия сходится плохо.
+        return make_pipeline(StandardScaler(), LogisticRegression(**kw))
+    if backend == "tfidf_logreg":
+        from sklearn.compose import ColumnTransformer
+        from sklearn.feature_extraction.text import TfidfVectorizer
+        from sklearn.linear_model import LogisticRegression
+        from sklearn.pipeline import Pipeline
+        from sklearn.preprocessing import StandardScaler
+        kw.pop("random_state", None)
+        kw.setdefault("C", 2.0)
+        kw.setdefault("max_iter", 5000)
+        kw.setdefault("class_weight", "balanced")
+
+        def tfidf():
+            return TfidfVectorizer(analyzer="char_wb", ngram_range=(2, 5),
+                                   lowercase=True, sublinear_tf=True, min_df=2)
+
+        transformers = [("u", tfidf(), "u_text"), ("v", tfidf(), "v_text")]
+        if feature_columns:
+            transformers.append(("num", StandardScaler(), list(feature_columns)))
+        return Pipeline([("features", ColumnTransformer(transformers)),
+                         ("clf", LogisticRegression(**kw))])
     raise ValueError(f"Unknown backend: {backend}")
+
+
+def make_input(df: pd.DataFrame, backend: str, feature_columns: list[str]):
+    """Матрица входа для estimator: numpy для числовых бэкендов,
+    DataFrame с текстами меток для текстовых."""
+    if backend in TEXT_BACKENDS:
+        X = df[feature_columns].astype(float).fillna(0)
+        for c in TEXT_COLS:
+            X[c] = df[c].astype(str).str.strip().values
+        return X
+    return df[feature_columns].astype(float).fillna(0).values
+
+
+def fit_estimator(est: Any, X, y, backend: str, sample_weight=None) -> Any:
+    """fit с передачей sample_weight в нужный шаг (для Pipeline)."""
+    if sample_weight is None:
+        return est.fit(X, y)
+    if backend in {"gbm", "hgbm"}:
+        return est.fit(X, y, sample_weight=sample_weight)
+    if backend == "tfidf_logreg":
+        return est.fit(X, y, clf__sample_weight=sample_weight)
+    return est.fit(X, y)
 
 
 # Колонки, которые НЕ являются признаками (идентификаторы, тексты)
@@ -60,14 +116,21 @@ NON_FEATURE_COLS = {
     "pair_id", "u_id", "v_id", "u_text", "v_text",
     "relation", "source", "seed", "seed_qid", "extracted_ts",
     "wikidata_predicate", "wikidata_direction", "taxonomy_version",
+    "curated_version",
 }
+
+# Признаками считаются ТОЛЬКО колонки, созданные экстракторами признаков.
+# Раньше брались все числовые колонки, кроме NON_FEATURE_COLS, и в признаки
+# попадала служебная колонка curated_version (0.1 у всех пар precedes, NaN у
+# остальных) — прямая утечка метки класса precedes.
+FEATURE_PREFIXES = ("lex_", "sbert_", "topo_")
 
 
 def select_feature_columns(df: pd.DataFrame) -> list[str]:
-    """Отбирает числовые/bool колонки, исключая идентификаторы и метки."""
+    """Отбирает числовые/bool колонки, созданные экстракторами признаков."""
     cols = []
     for c in df.columns:
-        if c in NON_FEATURE_COLS:
+        if c in NON_FEATURE_COLS or not c.startswith(FEATURE_PREFIXES):
             continue
         if pd.api.types.is_numeric_dtype(df[c]) or pd.api.types.is_bool_dtype(df[c]):
             cols.append(c)
@@ -85,19 +148,25 @@ class SklearnClassifier(BaseClassifier):
         self.estimator_kwargs = estimator_kwargs
         self.estimator: Any = None
         self.feature_columns: list[str] | None = None
-        if model_path and Path(model_path).exists():
+        if model_path:
+            if not Path(model_path).exists():
+                raise FileNotFoundError(
+                    f"Файл модели не найден: {model_path}. "
+                    "Запусти scripts/train_classifier.py.")
             self.load(model_path)
 
     # ---- fit / save / load --------------------------------------------------
 
     def fit(self, X: pd.DataFrame, y: pd.Series,
-            feature_columns: list[str] | None = None) -> "SklearnClassifier":
+            feature_columns: list[str] | None = None,
+            sample_weight=None) -> "SklearnClassifier":
         self.feature_columns = feature_columns or select_feature_columns(X)
-        if not self.feature_columns:
+        if not self.feature_columns and self.backend not in TEXT_BACKENDS:
             raise ValueError("Не нашёл числовых признаков в DataFrame")
-        self.estimator = _make_estimator(self.backend, **self.estimator_kwargs)
-        Xn = X[self.feature_columns].astype(float).values
-        self.estimator.fit(Xn, y.values)
+        self.estimator = _make_estimator(self.backend, self.feature_columns,
+                                         **self.estimator_kwargs)
+        Xn = make_input(X, self.backend, self.feature_columns)
+        fit_estimator(self.estimator, Xn, y.values, self.backend, sample_weight)
         logger.info("Обучен %s: %d признаков, %d классов",
                     self.backend, len(self.feature_columns),
                     len(self.estimator.classes_))
@@ -127,9 +196,14 @@ class SklearnClassifier(BaseClassifier):
     def predict(self, df: pd.DataFrame) -> list[Prediction]:
         if self.estimator is None:
             raise RuntimeError(
-                "SklearnClassifier не обучен и model_path не задан/не существует. "
+                "SklearnClassifier не обучен и model_path не задан. "
                 "Запусти scripts/train_classifier.py.")
-        X = df[self.feature_columns].astype(float).values
+        missing = [c for c in self.feature_columns if c not in df.columns]
+        if missing:
+            raise ValueError(
+                f"Модель обучена на признаках, которых нет во входных данных: "
+                f"{missing}. Проверь список features в конфигурации пайплайна.")
+        X = make_input(df, self.backend, self.feature_columns)
         proba = self.estimator.predict_proba(X)
         classes = list(self.estimator.classes_)
 
