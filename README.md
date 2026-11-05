@@ -60,7 +60,7 @@ python scripts/evaluate_repeated.py \
 
 # 8. Запустить пайплайн с обученной моделью на карте
 python scripts/run_pipeline.py data/raw/synthetic_клетка.mm \
-    --config configs/experiments/exp_tfidf.yaml
+    --config configs/experiments/exp_maps.yaml
 
 # 9. Открыть UI (опционально)
 streamlit run src/mindmap2kg/viz/dashboard.py
@@ -77,20 +77,47 @@ kg.graphml           # итоговый KG для Gephi
 kg.jsonld            # итоговый KG для веб-приложений
 ```
 
-## Текущие результаты (20 групповых разбиений, без SBERT)
+## Текущие результаты
 
-| Модель | Macro-F1 |
-|---|---:|
-| tfidf_logreg (символьные n-граммы меток + лексика) | 0.437 ± 0.056 |
-| rf (только лексика) | 0.311 ± 0.042 |
-| всегда has_example | 0.10 |
+| Модель | Обучающие данные | Macro-F1 | Синтетические карты |
+|---|---|---:|---:|
+| **exp_maps**: tfidf_logreg + топология | 86 размеченных карт (`maps_llm.csv`) | **0.641 ± 0.038** (на незнакомых картах) | 45/56 |
+| exp_tfidf_sbert: tfidf_logreg + SBERT-векторы | Wikidata (`annotations_v1.csv`) | 0.496 ± 0.043 | 31/56 |
+| exp_tfidf: tfidf_logreg | Wikidata | 0.437 ± 0.056 | 28/56 |
+| rf, только лексика | Wikidata | 0.311 ± 0.042 | 21/56 |
+
+Macro-F1 — среднее по 20 групповым разбиениям (`scripts/evaluate_repeated.py`).
+Модель на Wikidata, применённая к картам, даёт лишь 0.29: пары из Wikidata
+выглядят не так, как связи в картах, и не имеют дерева. Обучение на картах
+решает обе проблемы и включает признаки топологии (+0.08).
+
+Карты в `data/generated/` сгенерированы языковой моделью (Claude) по темам
+школьного/вузовского курса биологии и размечены ею же; исходные схемы —
+`data/generated/outlines/*.txt`. Окончательная проверка — на настоящих
+картах (`scripts/labeling.py`, см. ниже).
 
 Важно: признаками считаются только колонки `lex_*`, `sbert_*`, `topo_*`.
 До исправления в признаки попадала служебная колонка `curated_version`
 (есть только у пар precedes) — это давало precedes F1 = 1.0 и ломало
-применение модели к реальной карте. Модели в `models/exp_*_sbert.joblib`,
-`exp_baseline_gbm.joblib` и отчёты к ним — старые (5 классов), их стоит
-переобучить.
+применение модели к реальной карте.
+
+## Размеченные карты
+
+```bash
+# Схемы → .mm с атрибутом GOLD_RELATION → таблица пар с топологией
+python scripts/outline_to_mm.py data/generated/outlines/*.txt --out-dir data/generated/maps
+python scripts/extract_labeled_pairs.py data/generated/maps --output data/labeled/maps_llm.csv
+
+# Обучение рабочей модели
+python scripts/train_classifier.py --annotations data/labeled/maps_llm.csv \
+    --backend tfidf_logreg --no-sbert --per-seed-cap 0 --per-class-cap 0 \
+    --run-id exp_maps --group-split --refit-full
+
+# Настоящие карты: выгрузка в Excel для разметки и обратно
+python scripts/labeling.py export data/real/maps --output data/real/to_label.xlsx
+python scripts/labeling.py apply data/real/to_label.xlsx \
+    --maps-dir data/real/maps --out-dir data/real/labeled_maps
+```
 
 ## Что уже работает
 

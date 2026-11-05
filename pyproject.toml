@@ -24,7 +24,7 @@ ui = ["streamlit>=1.30", "plotly>=5.18"]
 # Эмбеддинги текста
 text = ["sentence-transformers>=2.5", "spacy>=3.7"]
 # ML-классификаторы
-ml = ["scikit-learn>=1.4", "torch>=2.0"]
+ml = ["scikit-learn>=1.4", "torch>=2.0", "openpyxl>=3.1"]
 # Хранение через Parquet (когда появятся эмбеддинги)
 parquet = ["pyarrow>=14.0"]
 # Разработка

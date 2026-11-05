@@ -1,0 +1,37 @@
+# Рекомендуемая конфигурация: модель обучена на размеченных ментальных картах
+# (data/labeled/maps_llm.csv), использует n-граммы меток, лексические признаки
+# и топологию дерева. Macro-F1 на незнакомых картах (20 разбиений): 0.641 ± 0.038.
+# Модель обучается так:
+#   python scripts/train_classifier.py --annotations data/labeled/maps_llm.csv \
+#       --backend tfidf_logreg --no-sbert --per-seed-cap 0 --per-class-cap 0 \
+#       --run-id exp_maps --group-split --refit-full
+
+run_id: exp_maps
+taxonomy: configs/taxonomy.yaml
+
+parser:
+  name: freemind
+  options: {}
+
+pairing:
+  name: parent_child
+  options: {}
+
+features:
+  - name: lexical_simple
+    options: {}
+  - name: topology
+    options: {}
+
+classifier:
+  name: sklearn
+  options:
+    backend: tfidf_logreg
+    model_path: models/exp_maps.joblib
+
+exporters:
+  - name: graphml
+    options: {}
+  - name: jsonld
+    options:
+      base_iri: "https://mindmap2kg.org/v1/"

@@ -93,15 +93,17 @@ def main() -> int:
                     choices=BACKENDS)
     ap.add_argument("--n-repeats", type=int, default=20)
     ap.add_argument("--test-size", type=float, default=0.25)
-    ap.add_argument("--per-seed-cap", type=int, default=100)
-    ap.add_argument("--per-class-cap", type=int, default=300)
+    ap.add_argument("--per-seed-cap", type=int, default=100, help="0 — без ограничения")
+    ap.add_argument("--per-class-cap", type=int, default=300, help="0 — без ограничения")
+    ap.add_argument("--exclude-relations", nargs="*", default=["associated_with"])
     ap.add_argument("--out", default="reports/repeated_eval.md")
     args = ap.parse_args()
 
     df = pd.read_csv(args.annotations, encoding="utf-8-sig")
     df = df.dropna(subset=["u_text", "v_text", "relation"])
-    bal = balance(df, per_seed=args.per_seed_cap, per_class=args.per_class_cap,
-                  random_state=42)
+    df = df[~df["relation"].isin(args.exclude_relations or [])]
+    bal = balance(df, per_seed=args.per_seed_cap or None,
+                  per_class=args.per_class_cap or None, random_state=42)
 
     lines = ["# Оценка на повторных групповых разбиениях\n",
              f"- пар после балансировки: **{len(bal)}**, групп (seed): **{bal['seed'].nunique()}**",

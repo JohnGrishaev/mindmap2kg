@@ -163,13 +163,18 @@ def format_report_md(run_id: str, args, train_size: int, test_size: int,
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--annotations", required=True,
-                    help="CSV с парами и колонкой relation")
+    ap.add_argument("--annotations", required=True, nargs="+",
+                    help="CSV с парами и колонкой relation (можно несколько — склеиваются)")
+    ap.add_argument("--exclude-relations", nargs="*", default=["associated_with"],
+                    help="Классы, которые не участвуют в обучении (по умолчанию "
+                         "резервный associated_with)")
     ap.add_argument("--backend", default="tfidf_logreg", choices=BACKENDS)
     ap.add_argument("--run-id", default="baseline_gbm",
                     help="Идентификатор прогона (для имён файлов)")
-    ap.add_argument("--per-seed-cap", type=int, default=100)
-    ap.add_argument("--per-class-cap", type=int, default=300)
+    ap.add_argument("--per-seed-cap", type=int, default=100,
+                    help="Не больше N пар на один seed/карту; 0 — без ограничения")
+    ap.add_argument("--per-class-cap", type=int, default=300,
+                    help="Не больше N пар на класс; 0 — без ограничения")
     ap.add_argument("--test-size", type=float, default=0.25)
     ap.add_argument("--random-state", type=int, default=42)
     ap.add_argument("--group-split", action="store_true",
@@ -194,8 +199,9 @@ def main() -> int:
     args = ap.parse_args()
 
     # --- 1. Загрузка ---------------------------------------------------------
-    df = pd.read_csv(args.annotations, encoding="utf-8-sig")
-    logger.info("Загружено пар: %d", len(df))
+    df = pd.concat([pd.read_csv(p, encoding="utf-8-sig") for p in args.annotations],
+                   ignore_index=True)
+    logger.info("Загружено пар: %d из %d файлов", len(df), len(args.annotations))
     if "relation" not in df.columns:
         raise ValueError("В таблице нет колонки 'relation'")
 
@@ -208,10 +214,15 @@ def main() -> int:
         logger.warning("Удалено строк с пустыми текстами/relation: %d",
                        n_before - len(df))
 
+    if args.exclude_relations:
+        n0 = len(df)
+        df = df[~df["relation"].isin(args.exclude_relations)]
+        logger.info("Исключено пар классов %s: %d", args.exclude_relations, n0 - len(df))
+
     # --- 2. Балансировка ----------------------------------------------------
     df_bal = balance(df,
-                     per_seed=args.per_seed_cap,
-                     per_class=args.per_class_cap,
+                     per_seed=args.per_seed_cap or None,
+                     per_class=args.per_class_cap or None,
                      drop_collisions_flag=True,
                      random_state=args.random_state)
     logger.info("После балансировки: %d пар", len(df_bal))
