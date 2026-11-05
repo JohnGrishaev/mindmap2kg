@@ -4,7 +4,7 @@
 Поток:
   1. читаем data/labeled/annotations.csv
   2. (опц.) балансируем (cap-per-seed / cap-per-class) → отдельная таблица
-  3. строим признаки: lexical_simple + sbert (без полных векторов)
+  3. строим признаки: lexical_simple + sbert (с --sbert-vectors — полные векторы)
      [топология не считается — для табличных пар у нас нет MindMap;
       она доступна только в инференсе на реальной карте]
   4. train/test split: групповой по seed (--group-split) или стратифицированный
@@ -66,7 +66,8 @@ def make_stub_mindmap(df: pd.DataFrame) -> MindMap:
 
 def build_features(df: pd.DataFrame,
                    use_sbert: bool = True,
-                   sbert_model: str | None = None) -> pd.DataFrame:
+                   sbert_model: str | None = None,
+                   sbert_vectors: bool = False) -> pd.DataFrame:
     """Применяет фичеры: lexical_simple (+sbert опционально)."""
     # pair_id, u_id, v_id — нужны контрактом фичеров. Подмешиваем.
     work = df.copy()
@@ -85,7 +86,7 @@ def build_features(df: pd.DataFrame,
 
     if use_sbert:
         SBertCls = get("feature", "sbert")
-        sbert_kwargs = {"include_vectors": False}
+        sbert_kwargs = {"include_vectors": sbert_vectors}
         if sbert_model:
             sbert_kwargs["model_name"] = sbert_model
         work = SBertCls(**sbert_kwargs).transform(work, mm)
@@ -122,7 +123,7 @@ def format_report_md(run_id: str, args, train_size: int, test_size: int,
     P(f"- per-seed cap: {args.per_seed_cap}")
     P(f"- per-class cap: {args.per_class_cap}")
     P(f"- test size: {args.test_size}")
-    P(f"- use SBERT: {not args.no_sbert}")
+    P(f"- use SBERT: {not args.no_sbert}, full vectors: {args.sbert_vectors}")
     P(f"- random state: {args.random_state}")
     P(f"- train pairs: **{train_size}**, test pairs: **{test_size}**")
     P(f"- признаков: **{len(feature_columns)}**")
@@ -180,6 +181,9 @@ def main() -> int:
     ap.add_argument("--refit-full", action="store_true",
                     help="После оценки переобучить модель на всех парах и "
                          "сохранить её (метрики в отчёте — по тестовой части).")
+    ap.add_argument("--sbert-vectors", action="store_true",
+                    help="Передавать в модель полные SBERT-векторы u, v, u−v, u⊙v "
+                         "(1536 признаков). Рекомендуется с --backend tfidf_logreg.")
     ap.add_argument("--no-sbert", action="store_true",
                     help="Без SBERT (только лексика). Для smoke-теста.")
     ap.add_argument("--sbert-model", default=None,
@@ -223,7 +227,8 @@ def main() -> int:
     # --- 3. Признаки --------------------------------------------------------
     feats = build_features(df_bal,
                            use_sbert=not args.no_sbert,
-                           sbert_model=args.sbert_model)
+                           sbert_model=args.sbert_model,
+                           sbert_vectors=args.sbert_vectors)
     feature_columns = select_feature_columns(feats)
     logger.info("Признаков для модели: %d", len(feature_columns))
 

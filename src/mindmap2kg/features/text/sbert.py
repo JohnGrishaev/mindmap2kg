@@ -130,11 +130,15 @@ class SBertFeatures(BaseFeature):
         df["sbert_l2"] = np.linalg.norm(u_vecs - v_vecs, axis=1)
 
         if self.include_vectors:
+            # Одним concat: по одной колонке pandas строит 1536 копий таблицы.
             dim = u_vecs.shape[1]
-            for i in range(dim):
-                df[f"sbert_u_{i:03d}"] = u_vecs[:, i]
-                df[f"sbert_v_{i:03d}"] = v_vecs[:, i]
-                df[f"sbert_diff_{i:03d}"] = u_vecs[:, i] - v_vecs[:, i]
-                df[f"sbert_hadamard_{i:03d}"] = u_vecs[:, i] * v_vecs[:, i]
+            blocks = {"u": u_vecs, "v": v_vecs,
+                      "diff": u_vecs - v_vecs, "hadamard": u_vecs * v_vecs}
+            vec_df = pd.DataFrame(
+                np.hstack(list(blocks.values())),
+                columns=[f"sbert_{k}_{i:03d}" for k in blocks for i in range(dim)],
+                index=df.index,
+            )
+            df = pd.concat([df, vec_df], axis=1)
 
         return df

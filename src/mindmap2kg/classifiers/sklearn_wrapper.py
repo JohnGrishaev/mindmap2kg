@@ -7,10 +7,13 @@
   * rf — RandomForestClassifier
   * hgbm — HistGradientBoostingClassifier (быстрее на больших данных)
   * tfidf_logreg — логистическая регрессия на символьных n-граммах меток
-    u_text и v_text (TF-IDF, 2–5 символов) плюс все числовые признаки
-    (стандартизованные). Лучший вариант на текущих данных: n-граммы ловят
-    морфологию меток (-ость, -ние, -аза, -оз …), которую не видят
-    длины и коэффициенты Жаккара.
+    u_text и v_text (TF-IDF, 2–5 символов) плюс числовые признаки.
+    n-граммы ловят морфологию меток (-ость, -ние, -аза, -оз …), которую не
+    видят длины и коэффициенты Жаккара. Если среди признаков есть полные
+    SBERT-векторы (sbert_u_*, sbert_v_*, sbert_diff_*, sbert_hadamard_*), они
+    идут отдельным блоком: стандартизуются и делятся на sqrt(размерность),
+    чтобы 1536 плотных признаков не заглушали n-граммы (без этого
+    macro-F1 0.435, с ним 0.502 на 20 групповых разбиениях).
 
 Модель ОБУЧАЕТСЯ внешним скриптом (scripts/train_classifier.py) и сохраняется
 joblib-ом в models/{run_id}.joblib. Здесь предусмотрены два режима:
@@ -41,6 +44,28 @@ logger = logging.getLogger(__name__)
 # Бэкенды, которые помимо числовых признаков читают сырые тексты меток
 TEXT_BACKENDS = {"tfidf_logreg"}
 TEXT_COLS = ["u_text", "v_text"]
+SBERT_VECTOR_PREFIXES = ("sbert_u_", "sbert_v_", "sbert_diff_", "sbert_hadamard_")
+
+
+from sklearn.base import BaseEstimator, TransformerMixin  # noqa: E402
+
+
+class BlockWeight(TransformerMixin, BaseEstimator):
+    """Умножает блок признаков на weight / sqrt(число признаков блока).
+
+    Нужен, чтобы вклад блока в норму вектора (и в штраф L2) не зависел от
+    его размерности. Класс модульного уровня — иначе joblib не сохранит модель.
+    """
+
+    def __init__(self, weight: float = 1.0):
+        self.weight = weight
+
+    def fit(self, X, y=None):
+        self.scale_ = self.weight / np.sqrt(max(1, X.shape[1]))
+        return self
+
+    def transform(self, X):
+        return X * self.scale_
 BACKENDS = ["gbm", "hgbm", "rf", "logreg", "tfidf_logreg"]
 
 
@@ -81,9 +106,17 @@ def _make_estimator(backend: str, feature_columns: list[str] | None = None, **kw
             return TfidfVectorizer(analyzer="char_wb", ngram_range=(2, 5),
                                    lowercase=True, sublinear_tf=True, min_df=2)
 
+        from sklearn.pipeline import make_pipeline
+        cols = list(feature_columns or [])
+        vec_cols = [c for c in cols if c.startswith(SBERT_VECTOR_PREFIXES)]
+        num_cols = [c for c in cols if c not in vec_cols]
+        sbert_weight = kw.pop("sbert_weight", 1.0)
         transformers = [("u", tfidf(), "u_text"), ("v", tfidf(), "v_text")]
-        if feature_columns:
-            transformers.append(("num", StandardScaler(), list(feature_columns)))
+        if num_cols:
+            transformers.append(("num", StandardScaler(), num_cols))
+        if vec_cols:
+            transformers.append(("sbert_vec", make_pipeline(
+                StandardScaler(), BlockWeight(sbert_weight)), vec_cols))
         return Pipeline([("features", ColumnTransformer(transformers)),
                          ("clf", LogisticRegression(**kw))])
     raise ValueError(f"Unknown backend: {backend}")

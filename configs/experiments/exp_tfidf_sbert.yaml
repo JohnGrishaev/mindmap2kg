@@ -1,0 +1,42 @@
+# Лучшая конфигурация: символьные n-граммы меток + лексические признаки +
+# полные SBERT-векторы (отдельный блок с уравненным весом), логистическая
+# регрессия. Macro-F1 на 20 групповых разбиениях: 0.496 ± 0.043.
+# Модель обучается так:
+#   python scripts/train_classifier.py \
+#       --annotations data/labeled/annotations_v1.csv \
+#       --backend tfidf_logreg --sbert-vectors \
+#       --run-id exp_tfidf_sbert --group-split --refit-full
+
+run_id: exp_tfidf_sbert
+taxonomy: configs/taxonomy.yaml
+
+parser:
+  name: freemind
+  options: {}
+
+pairing:
+  name: parent_child
+  options: {}
+
+features:
+  - name: lexical_simple
+    options: {}
+  - name: topology        # считается и сохраняется в 03_features.csv, моделью не используется
+    options: {}
+  - name: sbert
+    options:
+      model_name: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+      include_vectors: true
+
+classifier:
+  name: sklearn
+  options:
+    backend: tfidf_logreg
+    model_path: models/exp_tfidf_sbert.joblib
+
+exporters:
+  - name: graphml
+    options: {}
+  - name: jsonld
+    options:
+      base_iri: "https://mindmap2kg.org/v1/"
